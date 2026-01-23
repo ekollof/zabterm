@@ -172,7 +172,7 @@ class ZabbixAPI:
         # To close a problem manually, we acknowledge it (action=1) with a message (action=2)
         # Combined: action=3 (1+2)
         params = {
-            "eventids": eventid,
+            "eventids": [eventid],  # Must be array
             "action": 3,  # 1 (acknowledge) + 2 (add message)
             "message": message
         }
@@ -181,7 +181,7 @@ class ZabbixAPI:
     async def acknowledge_only(self, eventid: str):
         """Acknowledge an event without closing."""
         params = {
-            "eventids": eventid,
+            "eventids": [eventid],  # Must be array
             "action": 1,  # 1 = acknowledge only
         }
         return await self._request("event.acknowledge", params)
@@ -189,7 +189,7 @@ class ZabbixAPI:
     async def add_message_to_event(self, eventid: str, message: str):
         """Add a message to an event."""
         params = {
-            "eventids": eventid,
+            "eventids": [eventid],  # Must be array
             "action": 3,  # 1 (acknowledge) + 2 (add message) - both required
             "message": message
         }
@@ -198,7 +198,7 @@ class ZabbixAPI:
     async def get_event_acknowledges(self, eventid: str):
         """Get acknowledgment history for an event."""
         params = {
-            "eventids": eventid,
+            "eventids": [eventid],  # Must be array
             "selectAcknowledges": "extend",
             "output": ["eventid"]
         }
