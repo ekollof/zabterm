@@ -32,9 +32,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/zabterm"
-Repository = "https://github.com/yourusername/zabterm"
-Issues = "https://github.com/yourusername/zabterm/issues"
+Homepage = "https://github.com/ekollof/zabterm"
+Repository = "https://github.com/ekollof/zabterm"
+Issues = "https://github.com/ekollof/zabterm/issues"
 
 [project.scripts]
 zabterm = "zabterm:main"

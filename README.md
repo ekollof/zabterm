@@ -39,6 +39,12 @@ A terminal-based Zabbix alerts monitor built with Textual, providing a three-pan
 
 ### Using pipx (recommended)
 
+Install directly from GitHub to get the latest version:
+```bash
+pipx install git+https://github.com/ekollof/zabterm.git
+```
+
+Or from PyPI (when available):
 ```bash
 pipx install zabterm
 ```
@@ -46,13 +52,18 @@ pipx install zabterm
 ### Using pip
 
 ```bash
+pip install git+https://github.com/ekollof/zabterm.git
+```
+
+Or from PyPI (when available):
+```bash
 pip install zabterm
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/zabterm.git
+git clone https://github.com/ekollof/zabterm.git
 cd zabterm
 pip install .
 ```

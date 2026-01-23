@@ -4,12 +4,23 @@
 
 ### Install with pipx (recommended)
 
+Install directly from GitHub to get the latest version:
+```bash
+pipx install git+https://github.com/ekollof/zabterm.git
+```
+
+Or from PyPI (when available):
 ```bash
 pipx install zabterm
 ```
 
 ### Install with pip
 
+```bash
+pip install git+https://github.com/ekollof/zabterm.git
+```
+
+Or from PyPI (when available):
 ```bash
 pip install zabterm
 ```
@@ -59,7 +70,7 @@ ZabTerm searches for configuration files in the following order:
 ## Development Installation
 
 ```bash
-git clone https://github.com/yourusername/zabterm.git
+git clone https://github.com/ekollof/zabterm.git
 cd zabterm
 pip install -e .
 ```
