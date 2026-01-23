@@ -190,7 +190,7 @@ class ZabbixAPI:
         """Add a message to an event."""
         params = {
             "eventids": eventid,
-            "action": 2,  # 2 = add message
+            "action": 3,  # 1 (acknowledge) + 2 (add message) - both required
             "message": message
         }
         return await self._request("event.acknowledge", params)
