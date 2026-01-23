@@ -8,6 +8,11 @@ A terminal-based Zabbix alerts monitor built with Textual, providing a three-pan
   - Left: Critical/High priority alerts (top) and Info alerts (bottom)
   - Right: Real-time alert details as you navigate
 - Real-time monitoring of Zabbix triggers/alerts
+- **Alert interaction:**
+  - Close alerts with Ctrl-X (acknowledge and mark as closed)
+  - Acknowledge alerts with Ctrl-A
+  - Add custom messages to alerts with Ctrl-M
+  - View acknowledgment history in alert details
 - **Desktop notifications** - Get notified when new critical alerts (High/Disaster) appear
   - Uses libnotify (notify-send)
   - Configurable on/off
@@ -121,6 +126,9 @@ This will make tmux highlight the window in the status bar when new alerts appea
 - `q` - Quit the application
 - `r` - Manually refresh data (bypasses cache)
 - `Tab` - Switch focus between critical and info tables
+- `Ctrl+X` - Close the selected alert (acknowledge with message)
+- `Ctrl+A` - Acknowledge the selected alert
+- `Ctrl+M` - Add a message to the selected alert
 - Arrow keys - Navigate through alerts
 - `Ctrl+C` - Force quit
 
