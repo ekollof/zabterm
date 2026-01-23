@@ -631,12 +631,12 @@ class ZabTerm(App):
             with Vertical(id="left-panel"):
                 with Vertical(id="critical-container"):
                     yield Static(
-                        "🔴 Critical & High Priority Alerts", classes="panel-title"
+                        "🔴 Critical & High Priority", classes="panel-title"
                     )
                     yield DataTable(id="critical-table")
                 with Vertical(id="info-container"):
                     yield Static(
-                        "ℹ️  Information & Low Priority Alerts", classes="panel-title"
+                        "ℹ️  Information & Low Priority", classes="panel-title"
                     )
                     yield DataTable(id="info-table")
             with Vertical(id="detail-panel"):
