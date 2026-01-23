@@ -1,0 +1,4 @@
+include README.md
+include LICENSE
+include zabterm/config.ini.example
+recursive-include zabterm *.py

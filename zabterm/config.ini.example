@@ -1,0 +1,21 @@
+[zabbix]
+url = https://your-zabbix-server.com
+
+# Authentication: Use EITHER api_key OR username+password
+# api_key = your-api-key-here
+username = your-username
+password = your-password
+
+verify_ssl = true
+refresh_interval = 10
+
+[display]
+max_alerts = 100
+sort_by = lastchange
+show_acknowledged = true
+severity_filter = 0
+
+[notifications]
+# Enable desktop notifications for new critical alerts (High and Disaster priority)
+# Requires notify-send (libnotify) to be installed
+enable = true
