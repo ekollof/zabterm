@@ -168,12 +168,12 @@ class ZabbixAPI:
 
     async def acknowledge_event(self, eventid: str, message: str = "Closed via ZabTerm"):
         """Acknowledge and close an event."""
-        # action is a bitmask: 1=acknowledge, 2=add message, 4=change severity, etc.
-        # To close a problem manually, we acknowledge it (action=1) with a message (action=2)
-        # Combined: action=3 (1+2)
+        # action is a bitmask: 1=close, 2=acknowledge, 4=add message, 8=change severity
+        # To close a problem: close (1) + acknowledge (2) + message (4)
+        # Combined: action=7 (1+2+4)
         params = {
             "eventids": [eventid],  # Must be array
-            "action": 3,  # 1 (acknowledge) + 2 (add message)
+            "action": 7,  # 1 (close) + 2 (acknowledge) + 4 (add message)
             "message": message
         }
         return await self._request("event.acknowledge", params)
@@ -182,7 +182,7 @@ class ZabbixAPI:
         """Acknowledge an event without closing."""
         params = {
             "eventids": [eventid],  # Must be array
-            "action": 1,  # 1 = acknowledge only
+            "action": 2,  # 2 = acknowledge event
         }
         return await self._request("event.acknowledge", params)
 
@@ -190,7 +190,7 @@ class ZabbixAPI:
         """Add a message to an event."""
         params = {
             "eventids": [eventid],  # Must be array
-            "action": 3,  # 1 (acknowledge) + 2 (add message) - both required
+            "action": 6,  # 2 (acknowledge) + 4 (add message)
             "message": message
         }
         return await self._request("event.acknowledge", params)
