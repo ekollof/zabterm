@@ -16,12 +16,13 @@ pip install zabterm
 
 ## Configuration
 
-1. Create the config directory:
+1. Create the config directory and copy the example config:
 ```bash
 mkdir -p ~/.config/zabterm
+cp config.ini.example ~/.config/zabterm/config.ini
 ```
 
-2. Create the configuration file at `~/.config/zabterm/config.ini`:
+2. Edit the configuration file at `~/.config/zabterm/config.ini`:
 ```ini
 [zabbix]
 url = https://your-zabbix-server.com

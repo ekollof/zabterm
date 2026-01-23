@@ -62,13 +62,10 @@ pip install .
 1. Create configuration file:
 ```bash
 mkdir -p ~/.config/zabterm
-cp /path/to/zabterm/config.ini.example ~/.config/zabterm/config.ini
+cp config.ini.example ~/.config/zabterm/config.ini
 ```
 
-Or if installed with pipx/pip, the example config is in the package:
-```bash
-python -c "import zabterm; import os; print(os.path.dirname(zabterm.__file__))"
-```
+If you installed via pip/pipx, the example config is included in the package directory.
 
 2. Edit the configuration file with your Zabbix server details:
 ```ini

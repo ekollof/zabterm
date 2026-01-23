@@ -43,4 +43,4 @@ zabterm = "zabterm:main"
 packages = ["zabterm"]
 
 [tool.setuptools.package-data]
-zabterm = ["*.ini.example"]
+zabterm = []

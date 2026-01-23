@@ -1541,12 +1541,7 @@ def main():
             print("Error: No config file found. Please create one at:")
             print("  ~/.config/zabterm/config.ini")
             print("or provide path as argument: zabterm /path/to/config.ini")
-            print("\nExample config location:")
-            example_config = os.path.join(
-                os.path.dirname(__file__), "config.ini.example"
-            )
-            if os.path.exists(example_config):
-                print(f"  {example_config}")
+            print("\nExample config (config.ini.example) can be found in the zabterm source directory.")
             sys.exit(1)
 
     app = ZabTerm(config_path=config_file)
