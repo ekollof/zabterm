@@ -1493,6 +1493,17 @@ def main():
     """Entry point."""
     import os
     import argparse
+    
+    # Set process title for better identification in task managers
+    try:
+        import setproctitle
+        setproctitle.setproctitle("zabterm")
+    except ImportError:
+        pass  # setproctitle not available, continue anyway
+    
+    # Set xterm terminal title
+    sys.stdout.write("\033]0;zabterm\007")
+    sys.stdout.flush()
 
     # Fix tmux rendering issues by ensuring proper color support
     if os.environ.get("TMUX"):
