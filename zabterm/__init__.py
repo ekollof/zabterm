@@ -319,11 +319,11 @@ class DetailScreen(ModalScreen):
         minutes, seconds = divmod(remainder, 60)
         duration_str = f"{hours}h {minutes}m {seconds}s"
 
-        trigger_url = trigger.get("url", "")
-        comments = trigger.get("comments", "")
-        expression = trigger.get("expression", "N/A")
-        error = trigger.get("error", "")
-        opdata = event_opdata if event_opdata else trigger.get("opdata", "")
+        trigger_url = trigger.get("url", "").strip()
+        comments = trigger.get("comments", "").strip()
+        expression = trigger.get("expression", "N/A").strip()
+        error = trigger.get("error", "").strip()
+        opdata = (event_opdata if event_opdata else trigger.get("opdata", "")).strip()
 
         import re
 
@@ -1054,10 +1054,10 @@ class ZabTerm(App):
         minutes, seconds = divmod(remainder, 60)
         duration_str = f"{hours}h {minutes}m {seconds}s"
 
-        trigger_url = trigger.get("url", "")
-        comments = trigger.get("comments", "")
-        expression = trigger.get("expression", "N/A")
-        error = trigger.get("error", "")
+        trigger_url = trigger.get("url", "").strip()
+        comments = trigger.get("comments", "").strip()
+        expression = trigger.get("expression", "N/A").strip()
+        error = trigger.get("error", "").strip()
 
         import re
 
