@@ -321,8 +321,9 @@ class DetailScreen(ModalScreen):
 
         trigger_url = trigger.get("url", "").strip()
         comments = trigger.get("comments", "").strip()
-        # Normalize expression - replace double backslashes with single
-        expression = trigger.get("expression", "N/A").strip().replace("\\\\", "\\")
+        # Normalize expression - Zabbix escapes square brackets with backslashes
+        # but Rich's escape() doesn't understand this, so we unescape them first
+        expression = trigger.get("expression", "N/A").strip().replace("\\[", "[").replace("\\]", "]")
         error = trigger.get("error", "").strip()
         opdata = (event_opdata if event_opdata else trigger.get("opdata", "")).strip()
 
@@ -1057,8 +1058,9 @@ class ZabTerm(App):
 
         trigger_url = trigger.get("url", "").strip()
         comments = trigger.get("comments", "").strip()
-        # Normalize expression - replace double backslashes with single
-        expression = trigger.get("expression", "N/A").strip().replace("\\\\", "\\")
+        # Normalize expression - Zabbix escapes square brackets with backslashes
+        # but Rich's escape() doesn't understand this, so we unescape them first
+        expression = trigger.get("expression", "N/A").strip().replace("\\[", "[").replace("\\]", "]")
         error = trigger.get("error", "").strip()
 
         import re
