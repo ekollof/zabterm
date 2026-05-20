@@ -2,6 +2,7 @@
 """ZabTerm - A Textual-based Zabbix alerts monitor."""
 
 import configparser
+import json
 import os
 import subprocess
 import sys
@@ -13,10 +14,49 @@ from typing import Any, Optional
 import httpx
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.theme import Theme
 from textual.widgets import DataTable, Footer, Header, Static, Input, Button
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from rich.markup import escape
+
+
+def load_wallust_theme() -> Optional[Theme]:
+    """Load a Textual Theme from wallust colors in ~/.cache/wal/colors.json."""
+    wal_path = Path.home() / ".cache" / "wal" / "colors.json"
+    if not wal_path.exists():
+        return None
+
+    try:
+        with wal_path.open("r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    special = data.get("special", {})
+    colors = data.get("colors", {})
+
+    background = special.get("background")
+    foreground = special.get("foreground")
+
+    if not background or not foreground:
+        return None
+
+    # Map wallust colorN palette to Textual theme colors
+    return Theme(
+        name="wallust",
+        primary=colors.get("color4", "#757E97"),
+        secondary=colors.get("color5", "#80899A"),
+        accent=colors.get("color3", "#7B7585"),
+        foreground=foreground,
+        background=background,
+        success=colors.get("color2", "#8C7A5D"),
+        warning=colors.get("color11", "#948CA0"),
+        error=colors.get("color1", "#6F7888"),
+        surface=colors.get("color0", "#403F40"),
+        panel=colors.get("color8", "#9B9DA1"),
+        dark=True,
+    )
 
 
 class ZabbixAPI:
@@ -166,7 +206,9 @@ class ZabbixAPI:
 
         return macros
 
-    async def acknowledge_event(self, eventid: str, message: str = "Closed via ZabTerm"):
+    async def acknowledge_event(
+        self, eventid: str, message: str = "Closed via ZabTerm"
+    ):
         """Acknowledge and close an event."""
         # action is a bitmask: 1=close, 2=acknowledge, 4=add message, 8=change severity
         # To close a problem: close (1) + acknowledge (2) + message (4)
@@ -174,7 +216,7 @@ class ZabbixAPI:
         params = {
             "eventids": [eventid],  # Must be array
             "action": 7,  # 1 (close) + 2 (acknowledge) + 4 (add message)
-            "message": message
+            "message": message,
         }
         return await self._request("event.acknowledge", params)
 
@@ -191,7 +233,7 @@ class ZabbixAPI:
         params = {
             "eventids": [eventid],  # Must be array
             "action": 6,  # 2 (acknowledge) + 4 (add message)
-            "message": message
+            "message": message,
         }
         return await self._request("event.acknowledge", params)
 
@@ -200,7 +242,7 @@ class ZabbixAPI:
         params = {
             "eventids": [eventid],  # Must be array
             "selectAcknowledges": "extend",
-            "output": ["eventid"]
+            "output": ["eventid"],
         }
         result = await self._request("event.get", params)
         if result and len(result) > 0:
@@ -323,7 +365,12 @@ class DetailScreen(ModalScreen):
         comments = trigger.get("comments", "").strip()
         # Normalize expression - Zabbix escapes square brackets with backslashes
         # but Rich's escape() doesn't understand this, so we unescape them first
-        expression = trigger.get("expression", "N/A").strip().replace("\\[", "[").replace("\\]", "]")
+        expression = (
+            trigger.get("expression", "N/A")
+            .strip()
+            .replace("\\[", "[")
+            .replace("\\]", "]")
+        )
         error = trigger.get("error", "").strip()
         opdata = (event_opdata if event_opdata else trigger.get("opdata", "")).strip()
 
@@ -382,8 +429,8 @@ class DetailScreen(ModalScreen):
         details = f"""[bold]Alert Details[/bold]
 
 [bold yellow]═══ Trigger Information ═══[/bold yellow]
-[bold cyan]Trigger ID:[/bold cyan] {trigger.get('triggerid', 'N/A')}
-[bold cyan]Description:[/bold cyan] {escape(trigger.get('description', 'N/A'))}
+[bold cyan]Trigger ID:[/bold cyan] {trigger.get("triggerid", "N/A")}
+[bold cyan]Description:[/bold cyan] {escape(trigger.get("description", "N/A"))}
 [bold cyan]Severity:[/bold cyan] {severity} (Priority: {priority})
 [bold cyan]Status:[/bold cyan] PROBLEM
 [bold cyan]Duration:[/bold cyan] {duration_str}"""
@@ -415,7 +462,7 @@ class DetailScreen(ModalScreen):
 [bold cyan]Event ID:[/bold cyan] {event_id}
 [bold cyan]Event Time:[/bold cyan] {event_time_str}
 [bold cyan]Last Change:[/bold cyan] {last_change_str}
-[bold cyan]Acknowledged:[/bold cyan] {'Yes ✓' if acknowledged else 'No ✗'}
+[bold cyan]Acknowledged:[/bold cyan] {"Yes ✓" if acknowledged else "No ✗"}
 
 [bold yellow]═══ Tags ═══[/bold yellow]
 {tags_str}
@@ -602,6 +649,11 @@ class ZabTerm(App):
         self.triggers_cache = {}
         self.known_critical_alerts = set()  # Track critical alert IDs we've seen
         self.initial_load = True  # Flag to skip notifications on first load
+        self.last_selected_trigger_id = (
+            None  # Persist selected trigger across refreshes
+        )
+        self._wal_path = Path.home() / ".cache" / "wal" / "colors.json"
+        self._wal_mtime = 0.0
 
     def load_config(self, config_path: str) -> configparser.ConfigParser:
         """Load configuration from INI file."""
@@ -632,14 +684,10 @@ class ZabTerm(App):
         with Horizontal(id="main-container"):
             with Vertical(id="left-panel"):
                 with Vertical(id="critical-container"):
-                    yield Static(
-                        "Critical & High Priority", classes="panel-title"
-                    )
+                    yield Static("Critical & High Priority", classes="panel-title")
                     yield DataTable(id="critical-table")
                 with Vertical(id="info-container"):
-                    yield Static(
-                        "Information & Low Priority", classes="panel-title"
-                    )
+                    yield Static("Information & Low Priority", classes="panel-title")
                     yield DataTable(id="info-table")
             with Vertical(id="detail-panel"):
                 yield Static("Alert Details", id="detail-title")
@@ -650,6 +698,17 @@ class ZabTerm(App):
 
     def on_mount(self) -> None:
         """Set up the application on mount."""
+        # Register and activate wallust theme if available
+        wallust_theme = load_wallust_theme()
+        if wallust_theme:
+            self.register_theme(wallust_theme)
+            self.theme = "wallust"
+            try:
+                self._wal_mtime = self._wal_path.stat().st_mtime
+            except OSError:
+                self._wal_mtime = 0.0
+            self.set_interval(2, self._check_wallust_theme)
+
         critical_table = self.query_one("#critical-table", DataTable)
         info_table = self.query_one("#info-table", DataTable)
 
@@ -723,6 +782,21 @@ class ZabTerm(App):
         if self.stats_bar.refreshing:
             self.stats_bar.refresh()
 
+    def _check_wallust_theme(self) -> None:
+        """Poll wallust colors.json and refresh theme if it changed."""
+        try:
+            mtime = self._wal_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._wal_mtime:
+            return
+        self._wal_mtime = mtime
+        new_theme = load_wallust_theme()
+        if new_theme:
+            self.register_theme(new_theme)
+            if self.theme == "wallust":
+                self.refresh_css(animate=False)
+
     def action_refresh(self) -> None:
         """Manual refresh action - bypasses cache."""
         self.refresh_data(force=True)
@@ -776,7 +850,7 @@ class ZabTerm(App):
             return
 
         trigger = self.triggers_cache[row_key]
-        
+
         # Get the event ID from the last event
         last_event = trigger.get("lastEvent", [{}])
         if isinstance(last_event, list):
@@ -820,7 +894,7 @@ class ZabTerm(App):
             return
 
         trigger = self.triggers_cache[row_key]
-        
+
         # Get the event ID from the last event
         last_event = trigger.get("lastEvent", [{}])
         if isinstance(last_event, list):
@@ -864,7 +938,7 @@ class ZabTerm(App):
             return
 
         trigger = self.triggers_cache[row_key]
-        
+
         # Get the event ID from the last event
         last_event = trigger.get("lastEvent", [{}])
         if isinstance(last_event, list):
@@ -898,7 +972,10 @@ class ZabTerm(App):
             await self.zabbix.acknowledge_event(event_id)
 
             # Escape markup characters in the notification message
-            self.notify(f"Closed alert: {escape(host_name)} - {escape(description)}", severity="information")
+            self.notify(
+                f"Closed alert: {escape(host_name)} - {escape(description)}",
+                severity="information",
+            )
 
             # Refresh data to update the display
             await self._do_refresh(force=True)
@@ -917,15 +994,22 @@ class ZabTerm(App):
             assert self.zabbix is not None
             await self.zabbix.acknowledge_only(event_id)
 
-            self.notify(f"Acknowledged: {escape(host_name)} - {escape(description)}", severity="information")
+            self.notify(
+                f"Acknowledged: {escape(host_name)} - {escape(description)}",
+                severity="information",
+            )
 
             # Refresh data to update the display
             await self._do_refresh(force=True)
 
         except Exception as e:
-            self.notify(f"Failed to acknowledge alert: {escape(str(e))}", severity="error")
+            self.notify(
+                f"Failed to acknowledge alert: {escape(str(e))}", severity="error"
+            )
 
-    async def _add_message_async(self, event_id: str, message: str, trigger: dict) -> None:
+    async def _add_message_async(
+        self, event_id: str, message: str, trigger: dict
+    ) -> None:
         """Async method to add a message to an alert."""
         try:
             host_name = (
@@ -936,7 +1020,10 @@ class ZabTerm(App):
             assert self.zabbix is not None
             await self.zabbix.add_message_to_event(event_id, message)
 
-            self.notify(f"Message added to: {escape(host_name)} - {escape(description)}", severity="information")
+            self.notify(
+                f"Message added to: {escape(host_name)} - {escape(description)}",
+                severity="information",
+            )
 
             # Refresh data to update the display
             await self._do_refresh(force=True)
@@ -970,33 +1057,41 @@ class ZabTerm(App):
         hostids = [host["hostid"] for host in hosts]
         user_macros = {}
         acknowledges = []
-        
+
         try:
             assert self.zabbix is not None
             # Get global and host-level macros
             user_macros = await self.zabbix.get_user_macros(hostids)
-            
+
             # Also get template-level macros for the hosts
             if hostids:
-                host_data = await self.zabbix._request("host.get", {
-                    "output": ["hostid"],
-                    "hostids": hostids,
-                    "selectParentTemplates": ["templateid"]
-                })
-                
+                host_data = await self.zabbix._request(
+                    "host.get",
+                    {
+                        "output": ["hostid"],
+                        "hostids": hostids,
+                        "selectParentTemplates": ["templateid"],
+                    },
+                )
+
                 if host_data and host_data[0].get("parentTemplates"):
-                    template_ids = [t["templateid"] for t in host_data[0]["parentTemplates"]]
+                    template_ids = [
+                        t["templateid"] for t in host_data[0]["parentTemplates"]
+                    ]
                     if template_ids:
                         # Fetch macros from templates - templates are stored as hostids
-                        template_macros = await self.zabbix._request("usermacro.get", {
-                            "output": ["macro", "value"],
-                            "hostids": template_ids  # Use hostids for templates
-                        })
+                        template_macros = await self.zabbix._request(
+                            "usermacro.get",
+                            {
+                                "output": ["macro", "value"],
+                                "hostids": template_ids,  # Use hostids for templates
+                            },
+                        )
                         # Add template macros (host/global macros take precedence)
                         for m in template_macros:
                             if m["macro"] not in user_macros:
                                 user_macros[m["macro"]] = m["value"]
-            
+
             # Get event acknowledgments
             last_event = trigger.get("lastEvent", [{}])
             if isinstance(last_event, list):
@@ -1004,18 +1099,22 @@ class ZabTerm(App):
             event_id = last_event.get("eventid")
             if event_id:
                 acknowledges = await self.zabbix.get_event_acknowledges(event_id)
-                
+
         except Exception as e:
             self.log(f"Error fetching macros: {e}")
 
         detail_widget = self.query_one("#detail-content-widget", Static)
-        detail_widget.update(self._format_trigger_details(trigger, user_macros, acknowledges))
+        detail_widget.update(
+            self._format_trigger_details(trigger, user_macros, acknowledges)
+        )
 
-    def _format_trigger_details(self, trigger: dict, user_macros: dict, acknowledges: list = None) -> str:
+    def _format_trigger_details(
+        self, trigger: dict, user_macros: dict, acknowledges: list = None
+    ) -> str:
         """Format trigger details for display."""
         if acknowledges is None:
             acknowledges = []
-            
+
         priority_names = {
             0: "Not classified",
             1: "Information",
@@ -1060,7 +1159,12 @@ class ZabTerm(App):
         comments = trigger.get("comments", "").strip()
         # Normalize expression - Zabbix escapes square brackets with backslashes
         # but Rich's escape() doesn't understand this, so we unescape them first
-        expression = trigger.get("expression", "N/A").strip().replace("\\[", "[").replace("\\]", "]")
+        expression = (
+            trigger.get("expression", "N/A")
+            .strip()
+            .replace("\\[", "[")
+            .replace("\\]", "]")
+        )
         error = trigger.get("error", "").strip()
 
         import re
@@ -1122,9 +1226,9 @@ class ZabTerm(App):
 
         details = f"""[bold yellow]Trigger Information[/bold yellow]
 
-[cyan]ID:[/cyan] {trigger.get('triggerid', 'N/A')}
+[cyan]ID:[/cyan] {trigger.get("triggerid", "N/A")}
 [cyan]Description:[/cyan]
-{escape(trigger.get('description', 'N/A'))}
+{escape(trigger.get("description", "N/A"))}
 
 [cyan]Severity:[/cyan] {severity}
 [cyan]Duration:[/cyan] {duration_str}"""
@@ -1143,7 +1247,7 @@ class ZabTerm(App):
 [cyan]Event ID:[/cyan] {event_id}
 [cyan]Time:[/cyan] {event_time_str}
 [cyan]Last Change:[/cyan] {last_change_str}
-[cyan]Ack:[/cyan] {'Yes ✓' if acknowledged else 'No ✗'}
+[cyan]Ack:[/cyan] {"Yes ✓" if acknowledged else "No ✗"}
 
 [bold yellow]Expression[/bold yellow]
 {escape(expression)}"""
@@ -1164,11 +1268,15 @@ class ZabTerm(App):
             details += "\n\n[bold yellow]Acknowledgments[/bold yellow]"
             for ack in acknowledges:
                 ack_time = int(ack.get("clock", 0))
-                ack_time_str = datetime.fromtimestamp(ack_time).strftime("%Y-%m-%d %H:%M:%S") if ack_time else "N/A"
+                ack_time_str = (
+                    datetime.fromtimestamp(ack_time).strftime("%Y-%m-%d %H:%M:%S")
+                    if ack_time
+                    else "N/A"
+                )
                 ack_user = ack.get("name", "Unknown")
                 ack_message = ack.get("message", "")
                 ack_action = int(ack.get("action", 0))
-                
+
                 # Decode action flags
                 action_parts = []
                 if ack_action & 1:
@@ -1181,14 +1289,14 @@ class ZabTerm(App):
                     action_parts.append("Suppressed")
                 if ack_action & 32:
                     action_parts.append("Unsuppressed")
-                
+
                 action_str = ", ".join(action_parts) if action_parts else ""
-                
+
                 # Build the acknowledgment line
                 details += f"\n  • [{ack_time_str}] {escape(ack_user)}"
                 if action_str:
                     details += f" - {action_str}"
-                
+
                 # Always show message if present (on same line for short messages, new line for longer ones)
                 if ack_message:
                     if len(ack_message) < 60 and "\n" not in ack_message:
@@ -1210,19 +1318,26 @@ class ZabTerm(App):
 
         # Save which table has focus by ID and which alert is selected
         focused_table_id = None
-        selected_trigger_id = None
-        
+
         if self.focused is not None:
             focused_table_id = self.focused.id
-        
-        # Get the currently selected trigger ID
-        if critical_table.has_focus and critical_table.cursor_row is not None and critical_table.row_count > 0:
+
+        # Get the currently selected trigger ID from whichever table has a cursor,
+        # regardless of focus (focus may be on the detail pane or another widget).
+        if critical_table.cursor_row is not None and critical_table.row_count > 0:
             if critical_table.cursor_row < len(critical_table.ordered_rows):
-                selected_trigger_id = critical_table.ordered_rows[critical_table.cursor_row].key
-        elif info_table.has_focus and info_table.cursor_row is not None and info_table.row_count > 0:
+                self.last_selected_trigger_id = critical_table.ordered_rows[
+                    critical_table.cursor_row
+                ].key
+        elif info_table.cursor_row is not None and info_table.row_count > 0:
             if info_table.cursor_row < len(info_table.ordered_rows):
-                selected_trigger_id = info_table.ordered_rows[info_table.cursor_row].key
-        
+                self.last_selected_trigger_id = info_table.ordered_rows[
+                    info_table.cursor_row
+                ].key
+
+        # Use the persistent value so it survives across refreshes even when tables lose focus
+        selected_trigger_id = self.last_selected_trigger_id
+
         critical_cursor_row = critical_table.cursor_row
         info_cursor_row = info_table.cursor_row
 
@@ -1403,7 +1518,7 @@ class ZabTerm(App):
             cursor_restored = False
             restored_in_critical = False
             restored_in_info = False
-            
+
             if selected_trigger_id is not None:
                 # Try to find the trigger in the critical table first
                 for idx, row in enumerate(critical_table.ordered_rows):
@@ -1412,7 +1527,7 @@ class ZabTerm(App):
                         restored_in_critical = True
                         cursor_restored = True
                         break
-                
+
                 # If not in critical, try info table
                 if not cursor_restored:
                     for idx, row in enumerate(info_table.ordered_rows):
@@ -1421,7 +1536,7 @@ class ZabTerm(App):
                             restored_in_info = True
                             cursor_restored = True
                             break
-            
+
             # If we couldn't restore to the same trigger, use the old cursor position
             if not cursor_restored:
                 if critical_cursor_row is not None and critical_table.row_count > 0:
@@ -1441,36 +1556,35 @@ class ZabTerm(App):
                     and critical_table.row_count > 0
                 ):
                     critical_table.focus()
-                    # Only update detail pane if cursor is valid
-                    if (
-                        critical_table.cursor_row is not None
-                        and critical_table.cursor_row < len(critical_table.ordered_rows)
-                    ):
+                elif focused_table_id == "info-table" and info_table.row_count > 0:
+                    info_table.focus()
+
+            # Always update the detail pane to reflect the restored cursor position
+            if restored_in_critical and critical_table.cursor_row is not None:
+                if critical_table.cursor_row < len(critical_table.ordered_rows):
+                    row_key = critical_table.ordered_rows[critical_table.cursor_row].key
+                    self.show_detail_in_pane(row_key)
+            elif restored_in_info and info_table.cursor_row is not None:
+                if info_table.cursor_row < len(info_table.ordered_rows):
+                    row_key = info_table.ordered_rows[info_table.cursor_row].key
+                    self.show_detail_in_pane(row_key)
+            elif not cursor_restored:
+                # Trigger not found (resolved/gone) — show whatever row the cursor ended up on
+                if (
+                    critical_table.row_count > 0
+                    and critical_table.cursor_row is not None
+                ):
+                    if critical_table.cursor_row < len(critical_table.ordered_rows):
                         row_key = critical_table.ordered_rows[
                             critical_table.cursor_row
                         ].key
-                        # Only update if we restored to the same trigger or it changed
-                        if cursor_restored and selected_trigger_id == row_key:
-                            # Same trigger, just refresh details
-                            self.show_detail_in_pane(row_key)
-                        elif not cursor_restored:
-                            # Different trigger, update details
-                            self.show_detail_in_pane(row_key)
-                elif focused_table_id == "info-table" and info_table.row_count > 0:
-                    info_table.focus()
-                    # Only update detail pane if cursor is valid
-                    if (
-                        info_table.cursor_row is not None
-                        and info_table.cursor_row < len(info_table.ordered_rows)
-                    ):
+                        self.show_detail_in_pane(row_key)
+                        self.last_selected_trigger_id = row_key
+                elif info_table.row_count > 0 and info_table.cursor_row is not None:
+                    if info_table.cursor_row < len(info_table.ordered_rows):
                         row_key = info_table.ordered_rows[info_table.cursor_row].key
-                        # Only update if we restored to the same trigger or it changed
-                        if cursor_restored and selected_trigger_id == row_key:
-                            # Same trigger, just refresh details
-                            self.show_detail_in_pane(row_key)
-                        elif not cursor_restored:
-                            # Different trigger, update details
-                            self.show_detail_in_pane(row_key)
+                        self.show_detail_in_pane(row_key)
+                        self.last_selected_trigger_id = row_key
 
             self.stats_bar.total_alerts = len(triggers)
             self.stats_bar.critical = severity_counts[5]
@@ -1497,14 +1611,15 @@ def main():
     """Entry point."""
     import os
     import argparse
-    
+
     # Set process title for better identification in task managers
     try:
         import setproctitle
+
         setproctitle.setproctitle("zabterm")
     except ImportError:
         pass  # setproctitle not available, continue anyway
-    
+
     # Set xterm terminal title
     sys.stdout.write("\033]0;zabterm\007")
     sys.stdout.flush()
@@ -1556,7 +1671,9 @@ def main():
             print("Error: No config file found. Please create one at:")
             print("  ~/.config/zabterm/config.ini")
             print("or provide path as argument: zabterm /path/to/config.ini")
-            print("\nExample config (config.ini.example) can be found in the zabterm source directory.")
+            print(
+                "\nExample config (config.ini.example) can be found in the zabterm source directory."
+            )
             sys.exit(1)
 
     app = ZabTerm(config_path=config_file)
