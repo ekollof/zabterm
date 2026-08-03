@@ -1322,24 +1322,38 @@ class ZabTerm(App):
         if self.focused is not None:
             focused_table_id = self.focused.id
 
-        # Get the currently selected trigger ID from whichever table has a cursor,
-        # regardless of focus (focus may be on the detail pane or another widget).
-        if critical_table.cursor_row is not None and critical_table.row_count > 0:
-            if critical_table.cursor_row < len(critical_table.ordered_rows):
-                self.last_selected_trigger_id = critical_table.ordered_rows[
-                    critical_table.cursor_row
-                ].key
-        elif info_table.cursor_row is not None and info_table.row_count > 0:
-            if info_table.cursor_row < len(info_table.ordered_rows):
-                self.last_selected_trigger_id = info_table.ordered_rows[
-                    info_table.cursor_row
-                ].key
-
-        # Use the persistent value so it survives across refreshes even when tables lose focus
-        selected_trigger_id = self.last_selected_trigger_id
-
+        # Snapshot each table's cursor independently before clearing, so a
+        # refresh can restore selection on whichever pane the user was in.
+        # Using cursor_row alone is unreliable because refreshes can reorder
+        # rows (sorted by lastchange); match by triggerid (row key) instead.
         critical_cursor_row = critical_table.cursor_row
         info_cursor_row = info_table.cursor_row
+
+        critical_selected_key = None
+        info_selected_key = None
+
+        if (
+            critical_table.cursor_row is not None
+            and critical_table.row_count > 0
+            and critical_table.cursor_row < len(critical_table.ordered_rows)
+        ):
+            critical_selected_key = critical_table.ordered_rows[
+                critical_table.cursor_row
+            ].key
+
+        if (
+            info_table.cursor_row is not None
+            and info_table.row_count > 0
+            and info_table.cursor_row < len(info_table.ordered_rows)
+        ):
+            info_selected_key = info_table.ordered_rows[info_table.cursor_row].key
+
+        # Keep last_selected_trigger_id in sync with whichever table has focus,
+        # so other code reading it (detail pane lookups) stays consistent.
+        if focused_table_id == "critical-table":
+            self.last_selected_trigger_id = critical_selected_key
+        elif focused_table_id == "info-table":
+            self.last_selected_trigger_id = info_selected_key
 
         try:
             min_severity = self.config.getint("display", "severity_filter", fallback=0)
@@ -1514,40 +1528,40 @@ class ZabTerm(App):
             # Now update the triggers cache after all rows are added
             self.triggers_cache = new_triggers_cache
 
-            # Restore cursor positions - try to find the previously selected trigger first
-            cursor_restored = False
-            restored_in_critical = False
-            restored_in_info = False
-
-            if selected_trigger_id is not None:
-                # Try to find the trigger in the critical table first
+            # Restore each table's cursor independently. Match by triggerid so a
+            # reordered row still keeps the right entry selected; fall back to
+            # the old cursor index if the trigger fell out of the result set.
+            critical_restored = False
+            if critical_selected_key is not None:
                 for idx, row in enumerate(critical_table.ordered_rows):
-                    if row.key == selected_trigger_id:
+                    if row.key == critical_selected_key:
                         critical_table.move_cursor(row=idx)
-                        restored_in_critical = True
-                        cursor_restored = True
+                        critical_restored = True
                         break
+            if (
+                not critical_restored
+                and critical_cursor_row is not None
+                and critical_table.row_count > 0
+            ):
+                critical_table.move_cursor(
+                    row=min(critical_cursor_row, critical_table.row_count - 1)
+                )
 
-                # If not in critical, try info table
-                if not cursor_restored:
-                    for idx, row in enumerate(info_table.ordered_rows):
-                        if row.key == selected_trigger_id:
-                            info_table.move_cursor(row=idx)
-                            restored_in_info = True
-                            cursor_restored = True
-                            break
-
-            # If we couldn't restore to the same trigger, use the old cursor position
-            if not cursor_restored:
-                if critical_cursor_row is not None and critical_table.row_count > 0:
-                    critical_table.move_cursor(
-                        row=min(critical_cursor_row, critical_table.row_count - 1)
-                    )
-
-                if info_cursor_row is not None and info_table.row_count > 0:
-                    info_table.move_cursor(
-                        row=min(info_cursor_row, info_table.row_count - 1)
-                    )
+            info_restored = False
+            if info_selected_key is not None:
+                for idx, row in enumerate(info_table.ordered_rows):
+                    if row.key == info_selected_key:
+                        info_table.move_cursor(row=idx)
+                        info_restored = True
+                        break
+            if (
+                not info_restored
+                and info_cursor_row is not None
+                and info_table.row_count > 0
+            ):
+                info_table.move_cursor(
+                    row=min(info_cursor_row, info_table.row_count - 1)
+                )
 
             # Restore focus to the table that had it before refresh
             if focused_table_id is not None:
@@ -1559,32 +1573,33 @@ class ZabTerm(App):
                 elif focused_table_id == "info-table" and info_table.row_count > 0:
                     info_table.focus()
 
-            # Always update the detail pane to reflect the restored cursor position
-            if restored_in_critical and critical_table.cursor_row is not None:
-                if critical_table.cursor_row < len(critical_table.ordered_rows):
-                    row_key = critical_table.ordered_rows[critical_table.cursor_row].key
-                    self.show_detail_in_pane(row_key)
-            elif restored_in_info and info_table.cursor_row is not None:
-                if info_table.cursor_row < len(info_table.ordered_rows):
-                    row_key = info_table.ordered_rows[info_table.cursor_row].key
-                    self.show_detail_in_pane(row_key)
-            elif not cursor_restored:
-                # Trigger not found (resolved/gone) — show whatever row the cursor ended up on
+            # Update the detail pane to reflect whichever table the user was
+            # focused on, falling back to the focused table's current cursor
+            # if its previously selected trigger disappeared.
+            detail_row_key = None
+            if focused_table_id == "critical-table":
+                if critical_restored:
+                    detail_row_key = critical_selected_key
+                active_table = critical_table
+            elif focused_table_id == "info-table":
+                if info_restored:
+                    detail_row_key = info_selected_key
+                active_table = info_table
+            else:
+                active_table = None
+
+            if detail_row_key is not None:
+                self.show_detail_in_pane(detail_row_key)
+                self.last_selected_trigger_id = detail_row_key
+            elif active_table is not None and active_table.row_count > 0:
+                active_cursor = active_table.cursor_row
                 if (
-                    critical_table.row_count > 0
-                    and critical_table.cursor_row is not None
+                    active_cursor is not None
+                    and active_cursor < len(active_table.ordered_rows)
                 ):
-                    if critical_table.cursor_row < len(critical_table.ordered_rows):
-                        row_key = critical_table.ordered_rows[
-                            critical_table.cursor_row
-                        ].key
-                        self.show_detail_in_pane(row_key)
-                        self.last_selected_trigger_id = row_key
-                elif info_table.row_count > 0 and info_table.cursor_row is not None:
-                    if info_table.cursor_row < len(info_table.ordered_rows):
-                        row_key = info_table.ordered_rows[info_table.cursor_row].key
-                        self.show_detail_in_pane(row_key)
-                        self.last_selected_trigger_id = row_key
+                    row_key = active_table.ordered_rows[active_cursor].key
+                    self.show_detail_in_pane(row_key)
+                    self.last_selected_trigger_id = row_key
 
             self.stats_bar.total_alerts = len(triggers)
             self.stats_bar.critical = severity_counts[5]
