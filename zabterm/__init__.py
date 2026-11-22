@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ZabTerm - A Textual-based Zabbix alerts monitor."""
 
+import asyncio
 import configparser
 import json
 import os
@@ -19,6 +20,16 @@ from textual.widgets import DataTable, Footer, Header, Static, Input, Button
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from rich.markup import escape
+
+
+def _row_key_value(row_key) -> Optional[str]:
+    """Normalize a DataTable row key to a plain string trigger id."""
+    if row_key is None:
+        return None
+    value = getattr(row_key, "value", row_key)
+    if value is None:
+        return None
+    return str(value)
 
 
 def load_wallust_theme() -> Optional[Theme]:
@@ -649,9 +660,16 @@ class ZabTerm(App):
         self.triggers_cache = {}
         self.known_critical_alerts = set()  # Track critical alert IDs we've seen
         self.initial_load = True  # Flag to skip notifications on first load
-        self.last_selected_trigger_id = (
-            None  # Persist selected trigger across refreshes
-        )
+        # Persist selected trigger ids (plain strings) across refreshes so a
+        # table rebuild cannot silently drop the user's place in the list.
+        self.last_selected_trigger_id: Optional[str] = None
+        self.last_critical_trigger_id: Optional[str] = None
+        self.last_info_trigger_id: Optional[str] = None
+        # While True, ignore DataTable highlight events caused by clear/re-add
+        # so they do not overwrite selection or the detail pane mid-refresh.
+        self._restoring_selection = False
+        self._refresh_lock = asyncio.Lock()
+        self._detail_generation = 0
         self._wal_path = Path.home() / ".cache" / "wal" / "colors.json"
         self._wal_mtime = 0.0
 
@@ -1031,27 +1049,108 @@ class ZabTerm(App):
         except Exception as e:
             self.notify(f"Failed to add message: {escape(str(e))}", severity="error")
 
+    def _remember_selection(self, table_id: Optional[str], row_key) -> None:
+        """Record the user's selected trigger id for a table."""
+        trigger_id = _row_key_value(row_key)
+        if not trigger_id:
+            return
+        self.last_selected_trigger_id = trigger_id
+        if table_id == "critical-table":
+            self.last_critical_trigger_id = trigger_id
+        elif table_id == "info-table":
+            self.last_info_trigger_id = trigger_id
+
+    def _snapshot_table_selection(
+        self, table: DataTable
+    ) -> tuple[Optional[str], Optional[int]]:
+        """Capture the currently highlighted row as (trigger_id, cursor_row)."""
+        if table.row_count <= 0:
+            return None, None
+        cursor_row = table.cursor_row
+        if cursor_row is None or cursor_row >= len(table.ordered_rows):
+            return None, cursor_row
+        trigger_id = _row_key_value(table.ordered_rows[cursor_row].key)
+        return trigger_id, cursor_row
+
+    def _restore_table_cursor(
+        self,
+        table: DataTable,
+        trigger_id: Optional[str],
+        fallback_row: Optional[int],
+    ) -> bool:
+        """Restore cursor to a trigger id, or fall back to a row index.
+
+        Returns True if the trigger id was found and selected.
+        """
+        if table.row_count <= 0:
+            return False
+
+        if trigger_id is not None:
+            for idx, row in enumerate(table.ordered_rows):
+                if _row_key_value(row.key) == trigger_id:
+                    table.move_cursor(row=idx)
+                    return True
+
+        if fallback_row is not None:
+            table.move_cursor(row=min(fallback_row, table.row_count - 1))
+        return False
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection - update detail pane."""
+        if self._restoring_selection:
+            return
+        self._remember_selection(event.data_table.id, event.row_key)
         self.show_detail_in_pane(event.row_key)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlight - update detail pane as cursor moves."""
+        # Ignore programmatic highlights from clear/re-add during refresh so we
+        # do not treat the temporary top-row flash as the user's selection.
+        if self._restoring_selection:
+            return
         # Only update if the event is from the currently focused table
-        if event.row_key and event.data_table.has_focus:
-            self.show_detail_in_pane(event.row_key)
+        if not (event.row_key and event.data_table.has_focus):
+            return
+
+        # DataTable posts a highlight for row 0 when the first row is re-added
+        # after clear(); that message is often delivered only after we have
+        # already moved the cursor back. Ignore highlights that no longer match
+        # the live cursor so selection cannot snap to the top alert.
+        table = event.data_table
+        event_key = _row_key_value(event.row_key)
+        if table.row_count > 0 and table.cursor_row < len(table.ordered_rows):
+            current_key = _row_key_value(table.ordered_rows[table.cursor_row].key)
+            if (
+                current_key is not None
+                and event_key is not None
+                and current_key != event_key
+            ):
+                return
+
+        self._remember_selection(table.id, event.row_key)
+        self.show_detail_in_pane(event.row_key)
 
     def show_detail_in_pane(self, row_key) -> None:
         """Update the detail pane with trigger information."""
-        if row_key not in self.triggers_cache:
+        trigger_id = _row_key_value(row_key)
+        if trigger_id is None or trigger_id not in self.triggers_cache:
             return
 
-        trigger = self.triggers_cache[row_key]
+        trigger = self.triggers_cache[trigger_id]
 
-        # Fetch macros async
-        self.run_worker(self._fetch_and_show_details(trigger))
+        # Fetch macros async; exclusive so a slower earlier fetch cannot
+        # overwrite a newer selection (e.g. top-row flash during refresh).
+        self._detail_generation += 1
+        generation = self._detail_generation
+        self.run_worker(
+            self._fetch_and_show_details(trigger, generation),
+            exclusive=True,
+            group="detail-pane",
+        )
 
-    async def _fetch_and_show_details(self, trigger: dict) -> None:
+    async def _fetch_and_show_details(
+        self, trigger: dict, generation: int
+    ) -> None:
         """Fetch macros and update detail pane."""
         hosts = trigger.get("hosts", [])
         hostids = [host["hostid"] for host in hosts]
@@ -1102,6 +1201,10 @@ class ZabTerm(App):
 
         except Exception as e:
             self.log(f"Error fetching macros: {e}")
+
+        # Drop stale results if the user moved on while we were fetching
+        if generation != self._detail_generation:
+            return
 
         detail_widget = self.query_one("#detail-content-widget", Static)
         detail_widget.update(
@@ -1311,49 +1414,17 @@ class ZabTerm(App):
 
     async def _do_refresh(self, force: bool = False) -> None:
         """Async data refresh."""
+        # Serialize refreshes so a second run cannot snapshot the cursor while
+        # another refresh has already cleared the tables (which resets to row 0).
+        async with self._refresh_lock:
+            await self._do_refresh_locked(force=force)
+
+    async def _do_refresh_locked(self, force: bool = False) -> None:
+        """Refresh implementation; caller must hold ``_refresh_lock``."""
         self.stats_bar.refreshing = True
 
         critical_table = self.query_one("#critical-table", DataTable)
         info_table = self.query_one("#info-table", DataTable)
-
-        # Save which table has focus by ID and which alert is selected
-        focused_table_id = None
-
-        if self.focused is not None:
-            focused_table_id = self.focused.id
-
-        # Snapshot each table's cursor independently before clearing, so a
-        # refresh can restore selection on whichever pane the user was in.
-        # Using cursor_row alone is unreliable because refreshes can reorder
-        # rows (sorted by lastchange); match by triggerid (row key) instead.
-        critical_cursor_row = critical_table.cursor_row
-        info_cursor_row = info_table.cursor_row
-
-        critical_selected_key = None
-        info_selected_key = None
-
-        if (
-            critical_table.cursor_row is not None
-            and critical_table.row_count > 0
-            and critical_table.cursor_row < len(critical_table.ordered_rows)
-        ):
-            critical_selected_key = critical_table.ordered_rows[
-                critical_table.cursor_row
-            ].key
-
-        if (
-            info_table.cursor_row is not None
-            and info_table.row_count > 0
-            and info_table.cursor_row < len(info_table.ordered_rows)
-        ):
-            info_selected_key = info_table.ordered_rows[info_table.cursor_row].key
-
-        # Keep last_selected_trigger_id in sync with whichever table has focus,
-        # so other code reading it (detail pane lookups) stays consistent.
-        if focused_table_id == "critical-table":
-            self.last_selected_trigger_id = critical_selected_key
-        elif focused_table_id == "info-table":
-            self.last_selected_trigger_id = info_selected_key
 
         try:
             min_severity = self.config.getint("display", "severity_filter", fallback=0)
@@ -1366,8 +1437,41 @@ class ZabTerm(App):
                 min_severity=min_severity, only_unacknowledged=not show_ack, force=force
             )
 
-            critical_table.clear()
-            info_table.clear()
+            # Snapshot selection AFTER the network call and IMMEDIATELY before
+            # clear(), so we capture the latest cursor and never observe the
+            # transient row-0 state left by a previous clear.
+            focused_table_id = self.focused.id if self.focused is not None else None
+
+            critical_selected_id, critical_cursor_row = self._snapshot_table_selection(
+                critical_table
+            )
+            info_selected_id, info_cursor_row = self._snapshot_table_selection(
+                info_table
+            )
+
+            # Prefer the durable per-table selection recorded from user input;
+            # fall back to whatever the cursor is on right now.
+            if self.last_critical_trigger_id is not None:
+                critical_selected_id = self.last_critical_trigger_id
+            if self.last_info_trigger_id is not None:
+                info_selected_id = self.last_info_trigger_id
+
+            if focused_table_id == "critical-table" and critical_selected_id:
+                self.last_selected_trigger_id = critical_selected_id
+            elif focused_table_id == "info-table" and info_selected_id:
+                self.last_selected_trigger_id = info_selected_id
+
+            # Suppress highlight handlers while tables are rebuilt: DataTable
+            # re-highlights row 0 as soon as the first row is re-added, which
+            # would otherwise look like the user selected the top alert.
+            self._restoring_selection = True
+            try:
+                critical_table.clear()
+                info_table.clear()
+            except Exception:
+                self._restoring_selection = False
+                raise
+
             # Don't clear triggers_cache yet - we need it for the detail pane
             new_triggers_cache = {}
 
@@ -1528,40 +1632,34 @@ class ZabTerm(App):
             # Now update the triggers cache after all rows are added
             self.triggers_cache = new_triggers_cache
 
-            # Restore each table's cursor independently. Match by triggerid so a
-            # reordered row still keeps the right entry selected; fall back to
-            # the old cursor index if the trigger fell out of the result set.
-            critical_restored = False
-            if critical_selected_key is not None:
-                for idx, row in enumerate(critical_table.ordered_rows):
-                    if row.key == critical_selected_key:
-                        critical_table.move_cursor(row=idx)
-                        critical_restored = True
-                        break
-            if (
-                not critical_restored
-                and critical_cursor_row is not None
-                and critical_table.row_count > 0
-            ):
-                critical_table.move_cursor(
-                    row=min(critical_cursor_row, critical_table.row_count - 1)
-                )
+            # Restore each table's cursor by trigger id so reordering (sort by
+            # lastchange) keeps the same alert selected.
+            critical_restored = self._restore_table_cursor(
+                critical_table, critical_selected_id, critical_cursor_row
+            )
+            info_restored = self._restore_table_cursor(
+                info_table, info_selected_id, info_cursor_row
+            )
 
-            info_restored = False
-            if info_selected_key is not None:
-                for idx, row in enumerate(info_table.ordered_rows):
-                    if row.key == info_selected_key:
-                        info_table.move_cursor(row=idx)
-                        info_restored = True
-                        break
-            if (
-                not info_restored
-                and info_cursor_row is not None
-                and info_table.row_count > 0
-            ):
-                info_table.move_cursor(
-                    row=min(info_cursor_row, info_table.row_count - 1)
-                )
+            # Drop remembered ids that no longer exist in the result set
+            if critical_selected_id and not critical_restored:
+                if self.last_critical_trigger_id == critical_selected_id:
+                    self.last_critical_trigger_id = (
+                        _row_key_value(
+                            critical_table.ordered_rows[critical_table.cursor_row].key
+                        )
+                        if critical_table.row_count > 0
+                        else None
+                    )
+            if info_selected_id and not info_restored:
+                if self.last_info_trigger_id == info_selected_id:
+                    self.last_info_trigger_id = (
+                        _row_key_value(
+                            info_table.ordered_rows[info_table.cursor_row].key
+                        )
+                        if info_table.row_count > 0
+                        else None
+                    )
 
             # Restore focus to the table that had it before refresh
             if focused_table_id is not None:
@@ -1573,33 +1671,30 @@ class ZabTerm(App):
                 elif focused_table_id == "info-table" and info_table.row_count > 0:
                     info_table.focus()
 
-            # Update the detail pane to reflect whichever table the user was
-            # focused on, falling back to the focused table's current cursor
-            # if its previously selected trigger disappeared.
-            detail_row_key = None
+            # Keep _restoring_selection set until after the next refresh so any
+            # RowHighlighted messages posted during clear/re-add (the top-row
+            # flash) are ignored. Then apply the real detail pane update.
+            detail_trigger_id = None
             if focused_table_id == "critical-table":
                 if critical_restored:
-                    detail_row_key = critical_selected_key
-                active_table = critical_table
+                    detail_trigger_id = critical_selected_id
+                elif critical_table.row_count > 0:
+                    detail_trigger_id = _row_key_value(
+                        critical_table.ordered_rows[critical_table.cursor_row].key
+                    )
             elif focused_table_id == "info-table":
                 if info_restored:
-                    detail_row_key = info_selected_key
-                active_table = info_table
-            else:
-                active_table = None
+                    detail_trigger_id = info_selected_id
+                elif info_table.row_count > 0:
+                    detail_trigger_id = _row_key_value(
+                        info_table.ordered_rows[info_table.cursor_row].key
+                    )
 
-            if detail_row_key is not None:
-                self.show_detail_in_pane(detail_row_key)
-                self.last_selected_trigger_id = detail_row_key
-            elif active_table is not None and active_table.row_count > 0:
-                active_cursor = active_table.cursor_row
-                if (
-                    active_cursor is not None
-                    and active_cursor < len(active_table.ordered_rows)
-                ):
-                    row_key = active_table.ordered_rows[active_cursor].key
-                    self.show_detail_in_pane(row_key)
-                    self.last_selected_trigger_id = row_key
+            self.call_after_refresh(
+                self._finish_selection_restore,
+                focused_table_id,
+                detail_trigger_id,
+            )
 
             self.stats_bar.total_alerts = len(triggers)
             self.stats_bar.critical = severity_counts[5]
@@ -1618,8 +1713,28 @@ class ZabTerm(App):
             )
 
         except Exception as e:
+            self._restoring_selection = False
             self.stats_bar.refreshing = False
             self.notify(f"Error fetching data: {e}", severity="error")
+
+    def _finish_selection_restore(
+        self,
+        focused_table_id: Optional[str],
+        detail_trigger_id: Optional[str],
+    ) -> None:
+        """Clear the restore guard and sync the detail pane after a refresh."""
+        self._restoring_selection = False
+
+        if detail_trigger_id is None:
+            return
+
+        self.last_selected_trigger_id = detail_trigger_id
+        if focused_table_id == "critical-table":
+            self.last_critical_trigger_id = detail_trigger_id
+        elif focused_table_id == "info-table":
+            self.last_info_trigger_id = detail_trigger_id
+
+        self.show_detail_in_pane(detail_trigger_id)
 
 
 def main():
