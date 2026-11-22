@@ -2,6 +2,10 @@
 
 A terminal-based Zabbix alerts monitor built with Textual, providing a three-pane dashboard interface for viewing real-time Zabbix alerts.
 
+![ZabTerm screenshot](docs/screenshot.png)
+
+<sub>Screenshot rendered with fictional demo data.</sub>
+
 ## Features
 
 - **Three-pane layout:**
