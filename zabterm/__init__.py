@@ -31,6 +31,14 @@ NOTIFICATION_URGENCY = {"low": 0, "normal": 1, "critical": 2}
 
 NOTIFICATION_TIMEOUT = 5.0
 
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+
+def notification_icon() -> str:
+    """Return the packaged notification icon path, or "" when missing."""
+    icon = ASSETS_DIR / "zabterm.png"
+    return str(icon) if icon.is_file() else ""
+
 
 def _row_key_value(row_key) -> Optional[str]:
     """Normalize a DataTable row key to a plain string trigger id."""
@@ -799,7 +807,7 @@ class ZabTerm(App):
             (
                 "ZabTerm",
                 0,  # replaces_id: always create a new notification
-                "",  # app_icon
+                notification_icon(),
                 title,
                 message,
                 [],  # actions

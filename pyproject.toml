@@ -45,4 +45,4 @@ zabterm = "zabterm:main"
 packages = ["zabterm"]
 
 [tool.setuptools.package-data]
-zabterm = []
+zabterm = ["assets/*.png", "assets/*.svg"]

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="ZabTerm">
+  <title>ZabTerm</title>
+  <rect x="12" y="12" width="488" height="488" rx="108" fill="#1e1e2e"/>
+  <rect x="12" y="12" width="488" height="488" rx="108" fill="none" stroke="#3b3b55" stroke-width="4"/>
+  <path d="M148 96H364V142L262 292H364V338H148V292L250 142H148Z" fill="#d40000"/>
+  <path d="M214 386L248 406L214 426" fill="none" stroke="#4ebf71" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="268" y="382" width="30" height="48" rx="6" fill="#4ebf71"/>
+</svg>
