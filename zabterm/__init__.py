@@ -4,8 +4,6 @@
 import asyncio
 import configparser
 import json
-import os
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -13,13 +11,25 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+from jeepney import DBusAddress, MessageType, new_method_call
+from jeepney.io.asyncio import open_dbus_router
+from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.theme import Theme
-from textual.widgets import DataTable, Footer, Header, Static, Input, Button
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from rich.markup import escape
+from textual.theme import Theme
+from textual.widgets import Button, DataTable, Footer, Header, Input, Static
+
+NOTIFICATIONS_ADDRESS = DBusAddress(
+    "/org/freedesktop/Notifications",
+    bus_name="org.freedesktop.Notifications",
+    interface="org.freedesktop.Notifications",
+)
+
+NOTIFICATION_URGENCY = {"low": 0, "normal": 1, "critical": 2}
+
+NOTIFICATION_TIMEOUT = 5.0
 
 
 def _row_key_value(row_key) -> Optional[str]:
@@ -774,20 +784,40 @@ class ZabTerm(App):
         except Exception as e:
             self.notify(f"Error connecting to Zabbix: {e}", severity="error")
 
-    def send_desktop_notification(
+    async def send_desktop_notification(
         self, title: str, message: str, urgency: str = "normal"
     ) -> None:
-        """Send desktop notification using notify-send."""
+        """Send a desktop notification over D-Bus.
+
+        Failures (no session bus, no notification daemon, slow daemon) are
+        logged and otherwise ignored so monitoring keeps working.
+        """
+        notification = new_method_call(
+            NOTIFICATIONS_ADDRESS,
+            "Notify",
+            "susssasa{sv}i",
+            (
+                "ZabTerm",
+                0,  # replaces_id: always create a new notification
+                "",  # app_icon
+                title,
+                message,
+                [],  # actions
+                {"urgency": ("y", NOTIFICATION_URGENCY.get(urgency, 1))},
+                -1,  # expire_timeout: use the daemon's default
+            ),
+        )
+
         try:
-            subprocess.run(
-                ["notify-send", f"--urgency={urgency}", title, message],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            # notify-send not available or timed out, silently ignore
-            pass
+            async with open_dbus_router(bus="SESSION") as router:
+                reply = await asyncio.wait_for(
+                    router.send_and_get_reply(notification),
+                    timeout=NOTIFICATION_TIMEOUT,
+                )
+            if reply.header.message_type is MessageType.error:
+                self.log(f"Desktop notification rejected: {reply.body[0]}")
+        except Exception as e:
+            self.log(f"Desktop notification failed: {e}")
 
     def send_terminal_bell(self) -> None:
         """Send a bell signal to the terminal (tmux will flag it with attention)."""
@@ -1539,7 +1569,7 @@ class ZabTerm(App):
                         severity = severity_names_notify.get(priority, "Critical")
                         urgency = "critical" if priority == 5 else "normal"
 
-                        self.send_desktop_notification(
+                        await self.send_desktop_notification(
                             f"Zabbix Alert: {severity}",
                             f"{host_name}: {description}",
                             urgency=urgency,

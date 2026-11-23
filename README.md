@@ -18,7 +18,7 @@ A terminal-based Zabbix alerts monitor built with Textual, providing a three-pan
   - Add custom messages to alerts with Ctrl-M
   - View acknowledgment history in alert details
 - **Desktop notifications** - Get notified when new critical alerts (High/Disaster) appear
-  - Uses libnotify (notify-send)
+  - Uses D-Bus (`org.freedesktop.Notifications`) via jeepney
   - Configurable on/off
   - Disaster alerts marked as urgent
 - **tmux integration:**
@@ -169,17 +169,14 @@ This will make tmux highlight the window in the status bar when new alerts appea
 ### [notifications] section
 - `enable`: Enable/disable desktop notifications for new critical alerts (true/false)
   - Notifications are sent for High (priority 4) and Disaster (priority 5) alerts only
-  - Requires `notify-send` (libnotify) to be installed on your system
+  - Requires a D-Bus session bus with a notification daemon (standard on most desktops)
 
 ## Requirements
 
 - Python 3.8+
 - Textual 0.47.0+
 - httpx 0.25.0+
-- **Optional:** `notify-send` (libnotify) for desktop notifications
-  - Install on Debian/Ubuntu: `sudo apt install libnotify-bin`
-  - Install on Fedora/RHEL: `sudo dnf install libnotify`
-  - Install on Arch: `sudo pacman -S libnotify`
+- jeepney 0.8.0+
 - Requests 2.31.0+
 - Zabbix API 5.0+ (should work with most versions)
 

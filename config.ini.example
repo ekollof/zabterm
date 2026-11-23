@@ -17,5 +17,5 @@ severity_filter = 0
 
 [notifications]
 # Enable desktop notifications for new critical alerts (High and Disaster priority)
-# Requires notify-send (libnotify) to be installed
+# Requires a D-Bus session bus with a notification daemon
 enable = true
