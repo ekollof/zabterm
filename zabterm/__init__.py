@@ -800,6 +800,13 @@ class ZabTerm(App):
         Failures (no session bus, no notification daemon, slow daemon) are
         logged and otherwise ignored so monitoring keeps working.
         """
+        icon = notification_icon()
+        hints: dict = {"urgency": ("y", NOTIFICATION_URGENCY.get(urgency, 1))}
+        if icon:
+            # Standard hint understood by most daemons (and by Quickshell on
+            # Omarchy, which only accepts theme names in app_icon).
+            hints["image-path"] = ("s", icon)
+
         notification = new_method_call(
             NOTIFICATIONS_ADDRESS,
             "Notify",
@@ -807,11 +814,11 @@ class ZabTerm(App):
             (
                 "ZabTerm",
                 0,  # replaces_id: always create a new notification
-                notification_icon(),
+                icon,
                 title,
                 message,
                 [],  # actions
-                {"urgency": ("y", NOTIFICATION_URGENCY.get(urgency, 1))},
+                hints,
                 -1,  # expire_timeout: use the daemon's default
             ),
         )
